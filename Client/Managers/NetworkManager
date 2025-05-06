@@ -1,0 +1,123 @@
+package lab5.Client.Managers;
+
+
+import lab5.Common.Tools.ExecutionResponse;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
+
+import java.io.*;
+import java.net.*;
+import java.util.Scanner;
+
+public class NetworkManager {
+    private static final Logger logger = LogManager.getLogger(NetworkManager.class);
+
+    DatagramSocket ds;
+    DatagramPacket dp;
+    InetAddress host;
+    int port;
+    int timeout;
+    String hostname;
+
+    public NetworkManager(int timeout) {
+        this.timeout = timeout;
+    }
+
+    void defaultInit() throws UnknownHostException, SocketException {
+        logger.info("Инициализация с настройками по умолчанию...");
+        host = InetAddress.getByName("helios.cs.ifmo.ru");
+        port = 17534;
+        ds = new DatagramSocket();
+        ds.setSoTimeout(timeout);
+        logger.info("Подключено к {}:{}", host, port);
+    }
+
+    public boolean init(String[] args) {
+        try {
+            if (args.length == 0) {
+                defaultInit();
+            } else {
+                String filename = args[0];
+                if (filename != null && !filename.isEmpty()) {
+                    Scanner fileReader = new Scanner(new File(filename));
+                    String[] net = new String[2];
+                    byte counter = 0;
+                    for (int i = 0; i < net.length; i++) {
+                        counter += 1;
+                        net[i] = fileReader.nextLine();
+                    }
+                    if (counter != 2) {
+                        logger.warn("Файл настроек неполный. Использую настройки по умолчанию.");
+                        defaultInit();
+                    } else {
+                        host = InetAddress.getByName(net[0]);
+                        port = Integer.parseInt(net[1]);
+                        ds = new DatagramSocket();
+                        ds.setSoTimeout(timeout);
+                        logger.info("Подключено к {}:{}", host, port);
+                    }
+                } else {
+                    defaultInit();
+                }
+            }
+            return true;
+        } catch (IOException e) {
+            logger.error("Ошибка при инициализации подключения: {}", e.getMessage());
+            return false;
+        }
+    }
+
+    public boolean sendData(byte[] arr) {
+        try {
+            dp = new DatagramPacket(arr, arr.length, host, port);
+            ds.send(dp);
+            logger.info("Данные успешно отправлены на сервер.");
+            return true;
+        } catch (IOException e) {
+            logger.error("Не удалось отправить данные: {}", e.getMessage());
+            return false;
+        }
+    }
+
+    public static byte[] serializer(Object obj) {
+        try {
+            ByteArrayOutputStream bos = new ByteArrayOutputStream();
+            ObjectOutputStream oos = new ObjectOutputStream(bos);
+            oos.writeObject(obj);
+            oos.close();
+            logger.info("Объект успешно сериализован.");
+            return bos.toByteArray();
+        } catch (IOException e) {
+            logger.error("Ошибка сериализации объекта: {}", e.getMessage());
+            return null;
+        }
+    }
+
+    public static ExecutionResponse deserialize(byte[] bytes) {
+        if (bytes == null) {
+            logger.error("Пустой ответ от сервера, десериализация невозможна!");
+            return new ExecutionResponse(false, "Ответ от сервера не получен, выполнение отменено!");
+        }
+        InputStream is = new ByteArrayInputStream(bytes);
+        try (ObjectInputStream ois = new ObjectInputStream(is)) {
+            logger.info("Ответ успешно десериализован.");
+            return (ExecutionResponse) ois.readObject();
+        } catch (IOException | ClassNotFoundException e) {
+            logger.error("Ошибка десериализации ответа: {}", e.getMessage());
+            throw new RuntimeException(e);
+        }
+    }
+
+    public byte[] receiveData(int len) {
+        try {
+            byte[] arr = new byte[len];
+            dp = new DatagramPacket(arr, len);
+            ds.receive(dp);
+            logger.info("Данные успешно получены от сервера.");
+            return arr;
+        } catch (IOException e) {
+            logger.error("Ошибка при получении данных: {}", e.getMessage());
+            return null;
+        }
+    }
+}
