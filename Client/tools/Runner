@@ -1,0 +1,258 @@
+package lab5.Client.tools;
+
+import lab5.Client.Commands.ExecuteScript;
+import lab5.Client.Commands.Exit;
+import lab5.Client.Commands.Help;
+import lab5.Client.Managers.NetworkManager;
+import lab5.Common.Commands.CommanfTypes;
+import lab5.Common.Managers.Ask;
+import lab5.Common.Models.MusicGenre;
+import lab5.Common.Tools.Consolka;
+import lab5.Common.Tools.ExecutionResponse;
+
+import java.io.File;
+import java.io.FileNotFoundException;
+import java.nio.file.Files;
+import java.nio.file.Paths;
+import java.util.*;
+
+/**
+ * Класс исполнения программы
+ *
+ * @author Andrew Schmunk
+ * @version 1.0
+ */
+public class Runner {
+    /**
+     * консоль
+     */
+    private Consolka consolka;
+    /**
+     * менеджер команд
+     */
+    /**
+     * стек скрипта
+     */
+    private Map<CommanfTypes,String[]> commands;
+    private final List<String> scriptStack = new ArrayList<>();
+    /**
+     * максимальная глубина рекурсии(устанавливается пользователем)
+     */
+    private int lengthRecursion = -1;
+    private NetworkManager networkManager;
+
+    public Runner(NetworkManager networkManager, Consolka consolka, Map<CommanfTypes,String[]> commands) {
+        this.consolka = consolka;
+        this.networkManager = networkManager;
+        this.commands=commands;
+    }
+
+    /**
+     * Интерактивный режим
+     */
+    public void interactiveMode() {
+        try {
+
+            ExecutionResponse commandStatus;
+
+            String[] userCommand = {"", ""};
+
+            while (true) {
+                consolka.prompt();
+                userCommand = (consolka.readln().trim() + " ").split(" ", 2);
+                userCommand[1] = userCommand[1].trim();
+                consolka.println(userCommand[0]);
+                commandStatus = launchCommand(userCommand);
+                if (commandStatus.message() == "exit") break;
+                consolka.println(commandStatus.message());
+            }
+        } catch (NoSuchElementException exception) {
+            consolka.printError("Пользовательский ввод не обнаружен!");
+        } catch (IllegalStateException exception) {
+            consolka.printError("Непредвиденная ошибка!");
+        }
+    }
+
+    /**
+     * Функция проверки скрипта на наличие рекурсии
+     *
+     * @param argument      название запускаемого скрипта
+     * @param scriptScanner сканер скрипта
+     * @return true, если скрипт можно запускать
+     */
+    private boolean checkRecursion(String argument,
+                                   Scanner scriptScanner) {
+        int recStart = -1;
+        int i = 0;
+        for (String script : scriptStack) {
+            i++;
+            if (argument.equals(script)) {
+                if (recStart < 0) recStart = i;
+                if (lengthRecursion < 0) {
+                    consolka.selectConsoleScanner();
+                    consolka.println("Была замечена рекурсия! Введите максимальную глубину рекурсии (0..500)");
+                    while (lengthRecursion < 0 || lengthRecursion > 500) {
+                        try {
+                            consolka.print("> ");
+                            lengthRecursion = Integer.parseInt(consolka.readln().trim());
+                            if (lengthRecursion < 0 || lengthRecursion > 500) {
+                                consolka.println("длина не распознана");
+                            }
+                        } catch (NumberFormatException e) {
+                            consolka.println("длина не распознана");
+                        }
+                    }
+                    consolka.selectFileScanner(scriptScanner);
+                }
+                if (i > recStart + lengthRecursion || i > 500)
+                    return false;
+            }
+        }
+        return true;
+    }
+
+    /**
+     * Режим запуска скрипта
+     *
+     * @param argument название файла со скриптом
+     * @return возвращает ответ о выполнении скрипта
+     */
+    private ExecutionResponse scriptMode(String argument) {
+        String[] userCommand = {"", ""};
+        StringBuilder executionOutput = new StringBuilder();
+
+        if (!new File(argument).exists()) return new ExecutionResponse(false, "Файл не существет!");
+        if (!Files.isReadable(Paths.get(argument))) return new ExecutionResponse(false, "Прав для чтения нет!");
+
+        scriptStack.add(argument);
+        try (Scanner scriptScanner = new Scanner(new File(argument))) {
+
+            ExecutionResponse commandStatus;
+
+            if (!scriptScanner.hasNext()) throw new NoSuchElementException();
+            consolka.selectFileScanner(scriptScanner);
+            do {
+                userCommand = (consolka.readln().trim() + " ").split(" ", 2);
+                userCommand[1] = userCommand[1].trim();
+                while (consolka.isCanReadln() && userCommand[0].isEmpty()) {
+                    userCommand = (consolka.readln().trim() + " ").split(" ", 2);
+                    userCommand[1] = userCommand[1].trim();
+                }
+                executionOutput.append(consolka.getPrompt() + String.join(" ", userCommand) + "\n");
+                boolean needLaunch = true;
+                if (userCommand[0].equals("execute_script")) {
+                    needLaunch = checkRecursion(userCommand[1], scriptScanner);
+                }
+                commandStatus = needLaunch ? launchCommand(userCommand) : new ExecutionResponse(true,"Превышена максимальная глубина рекурсии");
+                if (userCommand[0].equals("execute_script")) consolka.selectFileScanner(scriptScanner);
+                executionOutput.append(commandStatus.message() + "\n");
+            } while (commandStatus.exitCode() && !commandStatus.message().equals("exit") && consolka.isCanReadln());
+
+            consolka.selectConsoleScanner();
+            if (!commandStatus.exitCode() && !(userCommand[0].equals("execute_script") && !userCommand[1].isEmpty())) {
+                executionOutput.append("Проверьте скрипт на корректность введенных данных!\n");
+            }
+
+            return new ExecutionResponse(commandStatus.exitCode(), executionOutput.toString());
+        } catch (FileNotFoundException exception) {
+            return new ExecutionResponse(false, "Файл со скриптом не найден!");
+        } catch (NoSuchElementException exception) {
+            return new ExecutionResponse(false, "Файл со скриптом пуст!");
+        } catch (IllegalStateException exception) {
+            consolka.printError("Непредвиденная ошибка!");
+            System.exit(0);
+        } finally {
+            scriptStack.remove(scriptStack.size() - 1);
+        }
+        return new ExecutionResponse(true, "");
+    }
+
+    /**
+     * Функиция загрузки команды
+     *
+     * @param userCommand загружаемая команда
+     * @return возвращает ответ о выполнении программы
+     */
+    private ExecutionResponse launchCommand(String[] userCommand) {
+        ExecutionResponse response;
+        if (userCommand[0].equals("")) return new ExecutionResponse(true, "");
+        CommanfTypes command = CommanfTypes.getByString(userCommand[0]);
+        if(!commands.containsKey(command)) {
+            command=null;
+        }
+
+        if (command == null)
+            return new ExecutionResponse(false, "Команда '" + userCommand[0] + "' не найдена. Наберите 'help' для справки");
+
+        switch (userCommand[0]) {
+
+            case "execute_script" -> {
+                ExecutionResponse tmp = new ExecuteScript(consolka).apply(userCommand);
+                if (!tmp.exitCode()) return tmp;
+                ExecutionResponse tmp2 = scriptMode(userCommand[1]);
+                return new ExecutionResponse(tmp2.exitCode(), tmp.message() + "\n" + tmp2.message().trim());
+            }
+            default -> {
+                byte[] bytes = new byte[userCommand.length];
+                if (command == CommanfTypes.Insert) {
+                    try {
+                        bytes = NetworkManager.serializer(new lab5.Common.Commands.Container(command, Ask.askMusicBand(consolka, 0).toStr()));
+                    } catch (Ask.AskBreak e) {
+                        consolka.println("Отмена...");
+                    }
+                } else if (command == CommanfTypes.Update) {
+                    try {
+                        bytes = NetworkManager.serializer(new lab5.Common.Commands.Container(command, Ask.askMusicBand(consolka, Integer.parseInt(userCommand[1])).toStr()));
+                    } catch (Ask.AskBreak e) {
+                        consolka.println("Отмена...");
+                    }
+                } else if (command == CommanfTypes.Help) {
+                    consolka.println(new Help(commands).apply(userCommand).message());
+                } else if (command == CommanfTypes.Exit) {
+                    bytes = NetworkManager.serializer(new lab5.Common.Commands.Container(CommanfTypes.Save, ""));
+                    networkManager.sendData(bytes);
+                    return new Exit(consolka).apply(userCommand);
+                } else if (command == CommanfTypes.RemoveKey | command == CommanfTypes.RemoveLowerKey) {
+                    bytes = NetworkManager.serializer(new lab5.Common.Commands.Container(command, userCommand[1]));
+                } else if (command == CommanfTypes.ReplaceIfGreater) {
+                    try {
+                        bytes = NetworkManager.serializer(new lab5.Common.Commands.Container(command, Ask.askMusicBand(consolka, 0).toStr()));
+                    } catch (Ask.AskBreak e) {
+                        consolka.println("Отмена...");
+                    }
+
+                } else if (command == CommanfTypes.CountLessThanGenre) {
+                    String genreInput = consolka.readln().trim().toUpperCase();
+                        try {
+                            MusicGenre genre = MusicGenre.valueOf(genreInput);
+                            bytes = NetworkManager.serializer(new lab5.Common.Commands.Container(command, genre.name()));
+                        } catch (IllegalArgumentException e) {
+                            consolka.println("Ошибка: жанр '" + genreInput + "' не существует. Допустимые значения: "
+                                    + Arrays.toString(MusicGenre.values()));
+                        }
+                }
+                else if (command == CommanfTypes.CountGreaterThanNumberOfParticipants) {
+                    try {
+                        long numberOfParticipants = Long.parseLong(consolka.readln());
+                        if (numberOfParticipants > 0) {
+                            bytes = NetworkManager.serializer(new lab5.Common.Commands.Container(command, String.valueOf(numberOfParticipants)));
+                        } else {
+                            consolka.println("Ошибка: количество участников должно быть больше 0");
+                        }
+                    } catch (NumberFormatException e) {
+                        consolka.println("Ошибка: введите корректное целое число");
+                    }
+                }else {
+                    bytes = NetworkManager.serializer(new lab5.Common.Commands.Container(command, ""));
+                }
+                if (command != CommanfTypes.Help) {
+                    networkManager.sendData(bytes);
+                    byte[] data = networkManager.receiveData(5069);
+                    response = NetworkManager.deserialize(data);
+                    return response;
+                }
+                else return new ExecutionResponse(false,"");
+            }
+        }
+    }
+}
