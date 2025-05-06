@@ -1,0 +1,39 @@
+package lab5.Server.Commands;
+
+import lab5.Common.Commands.Command;
+import lab5.Common.Tools.Consolka;
+import lab5.Common.Tools.ExecutionResponse;
+import lab5.Server.Managers.CollectionManager;
+
+import java.util.Set;
+import java.util.HashSet;
+
+/**
+ * Команда 'Clear'. очищает коллекцию
+ */
+public class Clear extends Command {
+    private final Consolka consolka;
+    private final CollectionManager collectionManager;
+
+    public Clear(Consolka consolka, CollectionManager collectionManager) {
+        super("clear", "очистить коллекцию");
+        this.consolka = consolka;
+        this.collectionManager = collectionManager;
+    }
+
+    @Override
+    public ExecutionResponse apply(String[] arguments) {
+        if (arguments.length > 1 && !arguments[1].isEmpty()) {
+            return new ExecutionResponse(false, " Неправильное количество аргументов!\nИспользование: '"+ getName() + "'");
+        }
+
+        // Создаем копию ключей для безопасного удаления
+        Set<Integer> keysToRemove = new HashSet<>(collectionManager.getCollection().keySet());
+
+        // Удаляем все элементы
+        keysToRemove.forEach(collectionManager::remove);
+
+        collectionManager.update();
+        return new ExecutionResponse(true, " Коллекция очищена ");
+    }
+}
